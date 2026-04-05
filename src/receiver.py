@@ -12,7 +12,6 @@ from voip_utils import (
     save_wav_file,
     log_event,
     should_reject_invite,
-    get_codec_name,
     get_default_audio_params,
     open_output_stream,
     play_audio_chunk,
@@ -254,9 +253,10 @@ def main():
 
             # --------------------------------------------------------
             # CHECK FOR SIP BYE
+            # Tiny timeout so RTP handling does not get delayed
             # --------------------------------------------------------
             try:
-                sip_sock.settimeout(0.2)
+                sip_sock.settimeout(0.001)
                 sip_message, sip_addr = sip_sock.recvfrom(MAX_BYTES)
                 decoded_sip = sip_message.decode(errors="ignore")
 

@@ -25,7 +25,6 @@ from voip_utils import (
     open_input_stream,
     read_mic_chunk,
     close_audio_stream,
-    mic_chunk_duration_ms
 )
 
 SIP_PORT = 5060
@@ -131,9 +130,6 @@ def stream_mic_audio(media_sock, rtcp_sock, dest_ip, dest_port, payload_type):
     octet_count = 0
     rtcp_interval_packets = 10
 
-    duration_ms = mic_chunk_duration_ms(chunk_frames, audio_params)
-    duration_sec = duration_ms / 1000.0
-
     log_event("AUDIO", f"Using microphone input with params: {audio_params}")
     log_event("RTP SEND", "Starting RTP stream in microphone mode")
     log_event("AUDIO", "Recording duration: 10 seconds")
@@ -147,6 +143,8 @@ def stream_mic_audio(media_sock, rtcp_sock, dest_ip, dest_port, payload_type):
         first_packet = True
 
         while time.time() - start_time < max_duration_seconds:
+            # read_mic_chunk already blocks until a full chunk is available,
+            # so we should NOT sleep again after sending.
             chunk = read_mic_chunk(input_stream, chunk_frames)
 
             rtp_packet = build_rtp_packet(
@@ -177,8 +175,6 @@ def stream_mic_audio(media_sock, rtcp_sock, dest_ip, dest_port, payload_type):
 
             seq_num += 1
             timestamp += chunk_frames
-
-            time.sleep(duration_sec)
 
         log_event("RTP SEND", "Microphone streaming finished")
         send_rtcp_report(rtcp_sock, dest_ip, dest_port, ssrc, packet_count, octet_count, timestamp)
@@ -214,11 +210,18 @@ def main():
         if chosen_file:
             audio_filename = chosen_file
 
-    codec_input = input("Enter codec name (default: PCMU): ").strip()
+    default_codec = "PCM" if is_live_mode(mode) else "PCMU"
+    codec_input = input(f"Enter codec name (default: {default_codec}): ").strip()
     if not codec_input:
-        codec_input = "PCMU"
+        codec_input = default_codec
 
     payload_type = get_payload_type(codec_input)
+
+    if is_live_mode(mode) and codec_input.upper() == "PCMU":
+        log_event(
+            "AUDIO WARN",
+            "Microphone mode works better with PCM because the captured mic data is raw PCM."
+        )
 
     call_id = generate_call_id()
     from_tag = generate_tag()
