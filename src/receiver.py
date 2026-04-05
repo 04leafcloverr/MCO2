@@ -1,5 +1,6 @@
 import socket
 import threading
+import time
 
 from voip_utils import (
     build_200_ok,
@@ -27,19 +28,22 @@ MAX_BYTES = 4096
 
 def receive_rtcp(rtcp_sock, stop_event):
     rtcp_sock.settimeout(1.0)
+    rtcp_counter = 0
 
     while not stop_event.is_set():
         try:
             packet, addr = rtcp_sock.recvfrom(MAX_BYTES)
             rtcp_info = parse_rtcp_packet(packet)
+            rtcp_counter += 1
 
-            log_event(
-                "RTCP RECV",
-                f"From={addr} SSRC={rtcp_info['ssrc']} "
-                f"Packets={rtcp_info['packet_count']} "
-                f"Octets={rtcp_info['octet_count']} "
-                f"RTP_TS={rtcp_info['rtp_timestamp']}"
-            )
+            if rtcp_counter % 10 == 0:
+                log_event(
+                    "RTCP RECV",
+                    f"From={addr} SSRC={rtcp_info['ssrc']} "
+                    f"Packets={rtcp_info['packet_count']} "
+                    f"Octets={rtcp_info['octet_count']} "
+                    f"RTP_TS={rtcp_info['rtp_timestamp']}"
+                )
         except socket.timeout:
             continue
         except Exception as e:
@@ -200,7 +204,7 @@ def main():
         # ------------------------------------------------------------
         if live_playback:
             try:
-                output_stream = open_output_stream(received_audio_params, blocksize=160)
+                output_stream = open_output_stream(received_audio_params, blocksize=640)
                 log_event("AUDIO", "Live speaker output stream opened")
             except Exception as e:
                 log_event("ERROR", f"Failed to open speaker output stream: {e}")
@@ -220,9 +224,12 @@ def main():
         # RECEIVE RTP UNTIL BYE ARRIVES
         # ------------------------------------------------------------
         bye_received = False
+        bye_time = None
+        last_rtp_time = time.time()
+        expected_total_packets = None
         packet_counter = 0
 
-        while not bye_received:
+        while True: #loop wont stop immediately after receiving BYE
             try:
                 packet, rtp_addr = media_sock.recvfrom(MAX_BYTES)
                 rtp_info = parse_rtp_packet(packet)
@@ -230,15 +237,17 @@ def main():
                 packet_counter += 1
                 payload = rtp_info["payload"]
                 received_audio_chunks.append(payload)
+                last_rtp_time = time.time()
 
-                log_event(
-                    "RTP RECV",
-                    f"Packet={packet_counter} From={rtp_addr} "
-                    f"Seq={rtp_info['sequence_number']} "
-                    f"Timestamp={rtp_info['timestamp']} "
-                    f"Bytes={len(payload)} "
-                    f"Codec={rtp_info['codec_name']}"
-                )
+                if packet_counter % 50 == 0:
+                    log_event(
+                        "RTP RECV",
+                        f"Packet={packet_counter} From={rtp_addr} "
+                        f"Seq={rtp_info['sequence_number']} "
+                        f"Timestamp={rtp_info['timestamp']} "
+                        f"Bytes={len(payload)} "
+                        f"Codec={rtp_info['codec_name']}"
+                    )
 
                 if live_playback and output_stream is not None:
                     try:
@@ -266,6 +275,10 @@ def main():
                     log_event("SIP", "BYE received")
                     print(decoded_sip)
 
+                    if "Total-RTP-Packets" in sip_headers:
+                        expected_total_packets = int(sip_headers["Total-RTP-Packets"])
+                        log_event("SIP", f"Expected total RTP packets: {expected_total_packets}")
+
                     current_via = f"Via: {sip_headers['Via']}" if "Via" in sip_headers else via_line
                     current_to = f"To: {sip_headers['To']}" if "To" in sip_headers else to_line
                     current_from = f"From: {sip_headers['From']}" if "From" in sip_headers else from_line
@@ -285,11 +298,24 @@ def main():
                     sip_sock.sendto(bye_ok.encode(), sip_addr)
 
                     bye_received = True
+                    bye_time = time.time()
 
             except socket.timeout:
                 pass
             except Exception as e:
                 log_event("SIP ERROR", str(e))
+
+            # stop when all packets are received
+            if bye_received and expected_total_packets is not None:
+                if packet_counter >= expected_total_packets:
+                    log_event("SYSTEM", "All expected RTP packets received. Closing media loop.\n\n")
+                    break
+
+            # stop if packets arent arriving anymore
+            if bye_received and (time.time() - last_rtp_time > 3.0):
+                log_event("DEBUG", f"Closing with PacketCounter={packet_counter}, Expected={expected_total_packets}")
+                log_event("SYSTEM", "No more RTP packets after BYE. Closing media loop.\n\n")
+                break
 
         # ------------------------------------------------------------
         # SAVE RECEIVED AUDIO

@@ -1,5 +1,6 @@
 import socket
 import time
+import threading
 
 from voip_utils import (
     generate_tag,
@@ -42,17 +43,18 @@ def send_rtcp_report(rtcp_sock, dest_ip, dest_port, ssrc, packet_count, octet_co
             rtp_timestamp=timestamp
         )
         rtcp_sock.sendto(rtcp_packet, (dest_ip, dest_port + 1))
-        log_event(
-            "RTCP SEND",
-            f"Sender Report sent | Packets={packet_count} Octets={octet_count} RTP_TS={timestamp}"
-        )
+        if packet_count % 50 == 0:
+            log_event(
+                "RTCP SEND",
+                f"Sender Report sent | Packets={packet_count} Octets={octet_count} RTP_TS={timestamp}"
+            )
     except Exception as e:
         log_event("ERROR", f"Failed to send RTCP Sender Report: {e}")
 
 
 def stream_wav_audio(media_sock, rtcp_sock, dest_ip, dest_port, audio_filename, payload_type):
     try:
-        audio_chunks, audio_params = read_wav_chunks(audio_filename, chunk_size=160)
+        audio_chunks, audio_params = read_wav_chunks(audio_filename, chunk_size=640)
     except FileNotFoundError:
         log_event("ERROR", f"Audio file not found: {audio_filename}")
         return 0, 0, 0
@@ -89,11 +91,12 @@ def stream_wav_audio(media_sock, rtcp_sock, dest_ip, dest_port, audio_filename, 
             packet_count += 1
             octet_count += len(chunk)
 
-            log_event(
-                "RTP SEND",
-                f"Packet={packet_count} Seq={seq_num} Timestamp={timestamp} "
-                f"Bytes={len(chunk)} Codec={get_codec_name(payload_type)}"
-            )
+            if packet_count % 50 == 0:
+                log_event(
+                    "RTP SEND",
+                    f"Packet={packet_count} Seq={seq_num} Timestamp={timestamp} "
+                    f"Bytes={len(chunk)} Codec={get_codec_name(payload_type)}"
+                )
 
             if packet_count % rtcp_interval_packets == 0:
                 send_rtcp_report(
@@ -116,11 +119,11 @@ def stream_wav_audio(media_sock, rtcp_sock, dest_ip, dest_port, audio_filename, 
     return packet_count, octet_count, timestamp
 
 
-def stream_mic_audio(media_sock, rtcp_sock, dest_ip, dest_port, payload_type):
+def stream_mic_audio(media_sock, rtcp_sock, dest_ip, dest_port, payload_type, stop_event):
     input_stream = None
 
     audio_params = get_default_audio_params()
-    chunk_frames = 160
+    chunk_frames = 640
 
     seq_num = 1
     timestamp = 0
@@ -132,17 +135,19 @@ def stream_mic_audio(media_sock, rtcp_sock, dest_ip, dest_port, payload_type):
 
     log_event("AUDIO", f"Using microphone input with params: {audio_params}")
     log_event("RTP SEND", "Starting RTP stream in microphone mode")
-    log_event("AUDIO", "Recording duration: 10 seconds")
+    log_event("AUDIO", "\n\nRecording until user stops (ENTER)\n\n")
 
     try:
         input_stream = open_input_stream(audio_params, blocksize=chunk_frames)
 
-        start_time = time.time()
-        max_duration_seconds = 10
+        #start_time = time.time()
+        #max_duration_seconds = 10
 
         first_packet = True
 
-        while time.time() - start_time < max_duration_seconds:
+        log_event("RTP SEND", "Microphone RTP straming in progress...\n\n")
+
+        while not stop_event.is_set():
             # read_mic_chunk already blocks until a full chunk is available,
             # so we should NOT sleep again after sending.
             chunk = read_mic_chunk(input_stream, chunk_frames)
@@ -161,11 +166,12 @@ def stream_mic_audio(media_sock, rtcp_sock, dest_ip, dest_port, payload_type):
             packet_count += 1
             octet_count += len(chunk)
 
-            log_event(
-                "RTP SEND",
-                f"Packet={packet_count} Seq={seq_num} Timestamp={timestamp} "
-                f"Bytes={len(chunk)} Codec={get_codec_name(payload_type)} Source=MIC"
-            )
+            # if packet_count % 50 == 0:
+            #     log_event(
+            #         "RTP SEND",
+            #         f"Packet={packet_count} Seq={seq_num} Timestamp={timestamp} "
+            #         f"Bytes={len(chunk)} Codec={get_codec_name(payload_type)} Source=MIC"
+            #     )
 
             if packet_count % rtcp_interval_packets == 0:
                 send_rtcp_report(
@@ -345,8 +351,10 @@ def main():
         # ------------------------------------------------------------
         # STREAM AUDIO
         # ------------------------------------------------------------
+        stop_event = threading.Event()
+
         if is_file_mode(mode):
-            stream_wav_audio(
+            total_packets_sent, _, _ = stream_wav_audio(
                 media_sock=media_sock,
                 rtcp_sock=rtcp_sock,
                 dest_ip=dest_ip,
@@ -355,13 +363,26 @@ def main():
                 payload_type=payload_type
             )
         else:
-            stream_mic_audio(
+            def wait_for_stop():
+                input()
+                stop_event.set()
+            
+            print("\n[INFO] Live mic streaming started.")
+            print("[INFO] Press ENTER anytime to stop transmission...\n\n")
+
+            threading.Thread(target=wait_for_stop, daemon=True).start()
+            
+            total_packets_sent, _, _ = stream_mic_audio(
                 media_sock=media_sock,
                 rtcp_sock=rtcp_sock,
                 dest_ip=dest_ip,
                 dest_port=dest_port,
-                payload_type=payload_type
+                payload_type=payload_type,
+                stop_event=stop_event
             )
+        
+        print("Finished sending RTP. Waiting before sending BYE...\n")
+        time.sleep(2)
 
         # ------------------------------------------------------------
         # SEND BYE
@@ -374,7 +395,8 @@ def main():
             to_line=to_line,
             from_line=from_line,
             call_id=call_id,
-            cseq=cseq
+            cseq=cseq,
+            total_rtp_packets=total_packets_sent
         )
 
         log_event("SIP", "Sending BYE")

@@ -188,7 +188,8 @@ def build_bye(
     to_line: str,
     from_line: str,
     call_id: str,
-    cseq: int
+    cseq: int,
+    total_rtp_packets: int
 ) -> str:
     msg = (
         f"BYE sip:{receiver_ip} SIP/2.0\r\n"
@@ -197,6 +198,7 @@ def build_bye(
         f"{from_line}\r\n"
         f"Call-ID: {call_id}\r\n"
         f"CSeq: {cseq} BYE\r\n"
+        f"Total-RTP-Packets: {total_rtp_packets}\r\n"
         "Content-Length: 0\r\n"
         "\r\n"
     )
@@ -491,12 +493,12 @@ def check_live_audio_support() -> None:
 def get_default_audio_params() -> Dict[str, int]:
     """
     Safe default demo audio format.
-    Mono, 16-bit, 8000 Hz is simpler for VoIP-style demos.
+    Mono, 16-bit, upgraded to 16000 Hz from 8000 Hz for a clearer audio.
     """
     return {
         "nchannels": 1,
         "sampwidth": 2,   # 16-bit PCM
-        "framerate": 8000
+        "framerate": 16000 # clearer voice
     }
 
 
