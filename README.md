@@ -1,95 +1,171 @@
-# Real-Time Audio Streaming over IP (VoIP Simulation)
-NSCOM01 – MCO2 (Term 2, AY 2025–2026)
+## Project Structure
 
----
+```
+project-folder/
+│
+├── caller.py              # SIP caller + RTP sender
+├── receiver.py            # SIP receiver + RTP listener
+├── voip_utils.py          # Helper functions (SIP, RTP, RTCP, audio)
+├── sample.wav             # Sample audio file for testing
+├── received_output.wav    # Output file (generated after receiving)
+├── README.md
+```
 
-## Group Members
-- Besa, April Denise B.
-- Martinez, Gabrielle P.
 
----
 
-## Project Overview
+## Requirements
 
-This project implements a simplified VoIP (Voice over IP) system using:
+Make sure the following are installed:
 
-- SIP (Session Initiation Protocol) for call setup and teardown  
-- SDP (Session Description Protocol) for media negotiation  
-- RTP (Real-time Transport Protocol) for audio streaming  
-- RTCP (RTP Control Protocol) for transmission statistics  
+- Python 3.x  
+- Required libraries:
 
-The system simulates a real-time call between two clients:
-- Caller (Client 1) sends audio  
-- Receiver (Client 2) receives and plays or stores audio  
+```
+pip install sounddevice numpy
+```
 
----
+Note: Microphone and live playback features require `sounddevice` and `numpy`.
 
-## Features Implemented
 
-### Core Requirements
 
-#### SIP Signaling (UDP)
-- Sends INVITE  
-- Receives 200 OK  
-- Sends ACK  
-- Includes required SIP headers (Via, To, From, Call-ID, CSeq)  
-- Sends BYE to terminate session  
-- Receives 200 OK for BYE  
+## How to Run the Program
 
----
+### Step 1: Start the Receiver
 
-#### SDP Negotiation
-- Embeds SDP in INVITE  
-- Parses SDP from 200 OK  
-- Extracts:
-  - IP address  
-  - RTP port  
-  - Codec  
+```
+python receiver.py
+```
 
----
+Enter:
+- Receiver IP (usually `127.0.0.1`)
+- Receiver name (any name, e.g., "Receiver")
 
-#### RTP Audio Streaming
-- Builds RTP packets with:
-  - Sequence number  
-  - Timestamp  
-  - SSRC  
-- Streams audio from a WAV file  
-- Sends packets in real-time intervals  
+Optional:
+- Enable live playback (`y` or `n`)
 
----
 
-#### RTP Receiving and Playback
-- Receives RTP packets  
-- Extracts payload  
-- Stores received audio  
-- Saves output as a WAV file  
-- Optional live playback through speakers  
 
----
+### Step 2: Start the Caller
 
-#### RTCP Support
-- Sends RTCP Sender Reports  
-- Receives and parses RTCP packets  
-- Displays:
+```
+python caller.py
+```
+
+Enter:
+- Receiver name  
+- Receiver IP (`127.0.0.1` for same computer testing)  
+- Caller name  
+- Audio mode:
+  - `wav` → send audio file  
+  - `mic` → use microphone  
+
+Optional:
+- WAV filename (default: `sample.wav`)  
+- Codec (default provided)
+
+
+
+### Step 3: Observe the Call Flow
+
+You should see:
+
+- SIP signaling:
+  - INVITE → 200 OK → ACK  
+- RTP streaming logs  
+- RTCP reports  
+- BYE → 200 OK  
+
+
+
+## Test Cases and Sample Outputs
+
+### Test Case 1: WAV File Streaming
+
+Input:
+- Mode: `wav`
+- File: `sample.wav`
+
+Expected Output:
+- RTP packets sent continuously  
+- Receiver logs incoming RTP packets  
+- Audio saved as `received_output.wav`  
+- Audio plays correctly (if playback enabled)
+
+
+
+### Test Case 2: Microphone Streaming
+
+Input:
+- Mode: `mic`
+
+Expected Output:
+- Live audio captured from microphone  
+- RTP packets sent in real-time  
+- Receiver plays audio (if enabled)  
+- Press ENTER to stop transmission  
+
+
+
+### Test Case 3: SIP Handshake Verification
+
+Expected Logs:
+- Sending INVITE  
+- 200 OK received  
+- Sending ACK  
+- Call established  
+
+
+
+### Test Case 4: Call Termination
+
+Expected Logs:
+- Sending BYE  
+- Received 200 OK for BYE  
+- Sockets closed successfully  
+
+
+
+### Test Case 5: RTCP Monitoring
+
+Expected Logs:
+- Periodic RTCP Sender Reports  
+- Display of:
   - Packet count  
   - Octet count  
-  - RTP timestamps  
+  - RTP timestamp  
 
----
 
-#### Basic Error Handling
-- Handles timeouts  
-- Handles invalid SIP messages  
-- Prevents crashes on unexpected packets  
 
----
+## Assumptions
 
-## Bonus Features
+- Both clients run on the same machine or local network  
+- No NAT traversal is required  
+- No SIP proxy or registrar is used  
+- Communication is direct (peer-to-peer)  
 
-- Microphone input streaming  
-- Live audio playback on receiver  
-- Dual audio modes (file and microphone)  
 
----
 
-## Project Structure
+## Limitations
+
+- One-way audio streaming (Caller → Receiver)  
+- No packet loss recovery (UDP-based)  
+- Basic codec handling only  
+- No encryption or authentication  
+
+
+
+## Notes for Demonstration
+
+- Use `127.0.0.1` for both clients if testing on one device  
+- Ensure ports `5060`, `5004`, and `5006` are not blocked  
+- Use a clear `.wav` file for best results  
+- Microphone mode may require adjusting system audio permissions  
+
+
+
+## References
+
+- RFC 3261 – SIP: Session Initiation Protocol  
+- RFC 4566 – SDP: Session Description Protocol  
+- RFC 3550 – RTP: Real-Time Transport Protocol  
+- RFC 3551 – RTP Profile for Audio  
