@@ -24,6 +24,9 @@ from voip_utils import (
     read_mic_chunk,
 )
 
+# ------------------------------------------------------------
+# NETWORK CONFIGURATION
+# ------------------------------------------------------------
 SIP_IP = "0.0.0.0"
 SIP_PORT = 5060
 RTP_IP = "0.0.0.0"
@@ -32,7 +35,11 @@ RTCP_PORT = RTP_PORT + 1
 MAX_BYTES = 4096
 
 
+# ------------------------------------------------------------
+# DETECT LOCAL IP
+# ------------------------------------------------------------
 def detect_local_ip(target_ip: str = "8.8.8.8") -> str:
+    # Get local LAN IP address
     test_sock = None
     try:
         test_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -45,14 +52,22 @@ def detect_local_ip(target_ip: str = "8.8.8.8") -> str:
             test_sock.close()
 
 
+# ------------------------------------------------------------
+# CHOOSE RECEIVER IP FOR SDP
+# ------------------------------------------------------------
 def choose_receiver_ip_for_sdp() -> str:
+    # Choose IP to advertise in SDP
     choice = input("Enter receiver IP to advertise [default: auto-detect]: ").strip()
     if choice:
         return choice
     return detect_local_ip()
 
 
+# ------------------------------------------------------------
+# SEND RTCP REPORT
+# ------------------------------------------------------------
 def send_rtcp_report(rtcp_sock, dest_ip, dest_port, ssrc, packet_count, octet_count, timestamp):
+    # Send RTCP sender report
     try:
         rtcp_packet = build_rtcp_sender_report(
             ssrc=ssrc,
@@ -71,6 +86,9 @@ def send_rtcp_report(rtcp_sock, dest_ip, dest_port, ssrc, packet_count, octet_co
         log_event("ERROR", f"Failed to send RTCP Sender Report: {e}")
 
 
+# ------------------------------------------------------------
+# RECEIVE RTCP REPORTS
+# ------------------------------------------------------------
 def receive_rtcp(rtcp_sock, stop_event):
     rtcp_sock.settimeout(1.0)
     rtcp_counter = 0
@@ -95,7 +113,11 @@ def receive_rtcp(rtcp_sock, stop_event):
             log_event("RTCP ERROR", str(e))
 
 
+# ------------------------------------------------------------
+# STREAM MICROPHONE AUDIO OVER RTP
+# ------------------------------------------------------------
 def stream_mic_audio(media_sock, rtcp_sock, dest_ip, dest_port, stop_event, payload_type=97):
+    # Send live microphone audio to caller
     input_stream = None
 
     audio_params = get_default_audio_params()
@@ -113,12 +135,15 @@ def stream_mic_audio(media_sock, rtcp_sock, dest_ip, dest_port, stop_event, payl
     log_event("RTP SEND", "Receiver microphone RTP streaming started")
 
     try:
+        # Open microphone input stream
         input_stream = open_input_stream(audio_params, blocksize=chunk_frames)
         first_packet = True
 
         while not stop_event.is_set():
+            # Read one mic chunk
             chunk = read_mic_chunk(input_stream, chunk_frames)
 
+            # Build RTP packet
             rtp_packet = build_rtp_packet(
                 payload=chunk,
                 seq_num=seq_num,
@@ -133,6 +158,7 @@ def stream_mic_audio(media_sock, rtcp_sock, dest_ip, dest_port, stop_event, payl
             packet_count += 1
             octet_count += len(chunk)
 
+            # Send RTCP periodically
             if packet_count % rtcp_interval_packets == 0:
                 send_rtcp_report(
                     rtcp_sock, dest_ip, dest_port, ssrc,
@@ -152,7 +178,11 @@ def stream_mic_audio(media_sock, rtcp_sock, dest_ip, dest_port, stop_event, payl
         close_audio_stream(input_stream)
 
 
+# ------------------------------------------------------------
+# MAIN RECEIVER FLOW
+# ------------------------------------------------------------
 def main():
+    # Get receiver settings
     receiver_ip = choose_receiver_ip_for_sdp()
     receiver_name = input("Enter receiver name: ").strip()
 
@@ -189,6 +219,7 @@ def main():
     remote_codec = None
 
     try:
+        # Create SIP socket
         sip_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sip_sock.bind((SIP_IP, SIP_PORT))
 
@@ -197,6 +228,9 @@ def main():
         log_event("SYSTEM", f"Live playback enabled: {live_playback}")
         log_event("SYSTEM", f"Two-way microphone send enabled: {send_mic_back}")
 
+        # ------------------------------------------------------------
+        # WAIT FOR INVITE
+        # ------------------------------------------------------------
         log_event("SIP", "Waiting for INVITE")
         invite_message, sip_addr = sip_sock.recvfrom(MAX_BYTES)
 
@@ -210,6 +244,7 @@ def main():
             log_event("ERROR", "Received message is not an INVITE")
             return
 
+        # Extract SIP headers
         if "Via" in headers:
             via_line = f"Via: {headers['Via']}"
         if "To" in headers:
@@ -221,6 +256,9 @@ def main():
         if "CSeq" in headers:
             cseq_line = f"CSeq: {headers['CSeq']}"
 
+        # ------------------------------------------------------------
+        # CHECK IF INVITE SHOULD BE REJECTED
+        # ------------------------------------------------------------
         reject, status_code, reason_phrase = should_reject_invite(receiver_name, receiver_ip)
 
         if reject:
@@ -238,6 +276,9 @@ def main():
             sip_sock.sendto(error_response.encode(), sip_addr)
             return
 
+        # ------------------------------------------------------------
+        # PARSE SDP
+        # ------------------------------------------------------------
         remote_sdp = parse_sdp(body)
         remote_ip = remote_sdp["ip"]
         remote_port = remote_sdp["port"]
@@ -249,6 +290,9 @@ def main():
 
         codec_payload_type = int(remote_codec) if remote_codec is not None else 97
 
+        # ------------------------------------------------------------
+        # SEND 200 OK
+        # ------------------------------------------------------------
         response = build_200_ok(
             via_line=via_line,
             to_line=to_line,
@@ -265,6 +309,9 @@ def main():
         print(response)
         sip_sock.sendto(response.encode(), sip_addr)
 
+        # ------------------------------------------------------------
+        # WAIT FOR ACK
+        # ------------------------------------------------------------
         try:
             sip_sock.settimeout(20)
             ack_message, sip_addr = sip_sock.recvfrom(MAX_BYTES)
@@ -284,6 +331,9 @@ def main():
 
         log_event("SIP", "Call established")
 
+        # ------------------------------------------------------------
+        # CREATE RTP AND RTCP SOCKETS
+        # ------------------------------------------------------------
         media_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         media_sock.bind((RTP_IP, RTP_PORT))
         media_sock.settimeout(1.0)
@@ -294,6 +344,9 @@ def main():
         log_event("RTP RECV", f"Receiver RTP listening on {RTP_IP}:{RTP_PORT}")
         log_event("RTCP RECV", f"Receiver RTCP listening on {RTP_IP}:{RTCP_PORT}")
 
+        # ------------------------------------------------------------
+        # OPEN SPEAKER OUTPUT
+        # ------------------------------------------------------------
         if live_playback:
             try:
                 output_stream = open_output_stream(received_audio_params, blocksize=640)
@@ -302,6 +355,9 @@ def main():
                 log_event("ERROR", f"Failed to open speaker output stream: {e}")
                 live_playback = False
 
+        # ------------------------------------------------------------
+        # START RTCP THREAD
+        # ------------------------------------------------------------
         rtcp_thread = threading.Thread(
             target=receive_rtcp,
             args=(rtcp_sock, stop_event),
@@ -309,6 +365,9 @@ def main():
         )
         rtcp_thread.start()
 
+        # ------------------------------------------------------------
+        # START TWO-WAY MIC SENDING
+        # ------------------------------------------------------------
         if send_mic_back and remote_ip and remote_port:
             sender_thread = threading.Thread(
                 target=stream_mic_audio,
@@ -323,6 +382,9 @@ def main():
         packet_counter = 0
         last_rtp_time = time.time()
 
+        # ------------------------------------------------------------
+        # MAIN MEDIA LOOP
+        # ------------------------------------------------------------
         while True:
             try:
                 packet, rtp_addr = media_sock.recvfrom(MAX_BYTES)
@@ -333,6 +395,7 @@ def main():
                 received_audio_chunks.append(payload)
                 last_rtp_time = time.time()
 
+                # Log every 50 packets
                 if packet_counter % 50 == 0:
                     log_event(
                         "RTP RECV",
@@ -343,6 +406,7 @@ def main():
                         f"Codec={rtp_info['codec_name']}"
                     )
 
+                # Play received audio
                 if live_playback and output_stream is not None:
                     try:
                         play_audio_chunk(output_stream, payload)
@@ -361,6 +425,7 @@ def main():
 
                 sip_start_line, sip_headers, _ = parse_sip_message(decoded_sip)
 
+                # Check for BYE
                 if sip_start_line.startswith("BYE"):
                     log_event("SIP", "BYE received")
                     print(decoded_sip)
@@ -409,6 +474,9 @@ def main():
         if sender_thread and sender_thread.is_alive():
             sender_thread.join(timeout=2)
 
+        # ------------------------------------------------------------
+        # SAVE RECEIVED AUDIO
+        # ------------------------------------------------------------
         if received_audio_chunks:
             output_filename = "received_output.wav"
             try:
@@ -431,6 +499,7 @@ def main():
 
         close_audio_stream(output_stream)
 
+        # Close all sockets
         if media_sock:
             media_sock.close()
         if rtcp_sock:
